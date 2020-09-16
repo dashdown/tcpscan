@@ -44,7 +44,7 @@ async def scan_port(ip, port, timeout=1):
 	результат (порт на самом деле открыт, но скажет, что закрыт).
 
 	:param ip: Строка вида '10.32.134.172'.
-	:param ports: - задается, как range().
+	:param ports: Конкретный сканируемый порт.
 
 	:returns: словарь вида - {'port': 1, 'state': 'open/close'}
 	'''
