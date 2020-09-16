@@ -17,9 +17,6 @@ handler = logging.handlers.SysLogHandler(address='/dev/log')
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 
-# http://192.168.1.10:8080/scan/95.142.39.186/1/550
-# http://192.168.1.10:8080/scan/198.12.250.43/1/550
-
 routes = web.RouteTableDef()
 
 
@@ -43,13 +40,13 @@ def port_range(start, end):
 	raise ValueError
 
 
-async def worker(index, queue, result):
+async def scan_worker(index, queue, result):
 	'''
 	Выполняет задачи из queue по сканированию tcp-портов.
 
 	Результаты сканирования направляет в лист result.
 	'''
-	name = f'Worker-{index}'
+	name = f'Scan worker-{index}'
 
 	while True:
 		ip, port = await queue.get()
@@ -103,7 +100,7 @@ async def scan_ports(ip, ports, scanners_count=1000):
 
 	result = list()
 
-	workers = [worker(i, queue, result) for i in range(scanners_count)]
+	workers = [scan_worker(i, queue, result) for i in range(scanners_count)]
 	tasks = [create_task(worker) for worker in workers]
 
 	logger.debug(f'Host[{ip}:{ports}] scan task start')
@@ -145,6 +142,11 @@ async def request_handler(request):
 		ip = str(ip_address(info['ip']))
 		ports = port_range(info['start_port'], info['end_port'])
 
+	except ValueError:
+		logger.debug(f'Invalid request {info} from {peername}')
+		return web.Response(text=f'Invalid IP or ports range')
+
+	else:
 		await scan_requests.put(scan_ports(ip, ports))
 
 		if scan_requests.full():
@@ -153,10 +155,6 @@ async def request_handler(request):
 		response = await scan_responses.get()
 		logger.debug(f'Send result scan {ip}:{ports} to {peername}')
 		return web.json_response(response)
-
-	except ValueError:
-		logger.debug(f'Invalid request {info} from {peername}')
-		return web.Response(text=f'Invalid IP or ports range')
 
 
 if __name__ == '__main__':
