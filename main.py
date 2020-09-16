@@ -4,9 +4,9 @@ from aiohttp import web
 from ipaddress import ip_address
 
 from asyncio import open_connection, wait_for
-from asyncio import TimeoutError as ATimeoutError
+from asyncio import TimeoutError as IOTimeoutError
 from asyncio import create_task
-from asyncio import Queue
+from asyncio import Queue as IOQueue
 
 
 # http://192.168.1.10:8080/scan/95.142.39.186/1/550
@@ -64,14 +64,14 @@ async def scan_port(ip, port, timeout=1):
 	try:
 		await wait_for(open_connection(ip, port), timeout)
 	
-	except ATimeoutError:
+	except IOTimeoutError:
 		return {'port': port, 'state': 'close'}
 	
 	else:
 		return {'port': port, 'state': 'open'}
 
 
-async def scan_host_ports(ip, ports, scanners_count=1000):
+async def scan_ports(ip, ports, scanners_count=1000):
 	'''
 	Сканирует tcp-порты в указанном промежутке.
 
@@ -84,7 +84,7 @@ async def scan_host_ports(ip, ports, scanners_count=1000):
 		{'port': 2, 'state': 'close'}, ...
 	]
 	'''
-	queue = Queue()
+	queue = IOQueue()
 	for port in ports:
 		queue.put_nowait(tuple([ip, port]))
 
@@ -100,7 +100,7 @@ async def scan_host_ports(ip, ports, scanners_count=1000):
 
 
 @routes.get('/scan/{ip}/{start_port}/{end_port}')
-async def scan_request_handle(request):
+async def request_handler(request):
 	'''
 	Запускает поиск открытых tcp-портов для указанного хоста. 
 	'''
@@ -109,9 +109,9 @@ async def scan_request_handle(request):
 	try:
 		ip = str(ip_address(info['ip']))
 		ports = port_range(info['start_port'], info['end_port'])
-		result = await scan_host_ports(ip, ports)
+		response = await scan_ports(ip, ports)
 
-		return web.Response(text=str(result))
+		return web.json_response(response)
 
 	except ValueError:
 		return web.Response(text=f'Invalid IP or ports range')
