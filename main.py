@@ -117,8 +117,8 @@ async def request_handler(request):
 		return web.Response(text=f'Invalid IP or ports range')
 
 
-app = web.Application()
-app.add_routes(routes)
-
 if __name__ == '__main__':
+	app = web.Application()
+	app.add_routes(routes)
+
 	web.run_app(app, host='192.168.1.10', port=8080)
