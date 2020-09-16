@@ -8,10 +8,17 @@ from asyncio import TimeoutError as IOTimeoutError
 from asyncio import create_task, get_event_loop
 from asyncio import Queue as IOQueue
 
+import logging, logging.handlers
+
+
+logger = logging.getLogger('tcpscan')
+handler = logging.handlers.SysLogHandler(address='/dev/log')
+
+logger.setLevel(logging.DEBUG)
+logger.addHandler(handler)
 
 # http://192.168.1.10:8080/scan/95.142.39.186/1/550
 # http://192.168.1.10:8080/scan/198.12.250.43/1/550
-
 
 routes = web.RouteTableDef()
 
@@ -36,16 +43,21 @@ def port_range(start, end):
 	raise ValueError
 
 
-async def worker(queue, result):
+async def worker(index, queue, result):
 	'''
 	Выполняет задачи из queue по сканированию tcp-портов.
 
 	Результаты сканирования направляет в лист result.
 	'''
+	name = f'Worker-{index}'
+
 	while True:
 		ip, port = await queue.get()
+
+		logger.debug(f'{name} getting job to scan {ip}:{port}')
 		result.append(await scan_port(ip, port))
 		queue.task_done()
+		logger.debug(f'{name} finished job')
 
 
 async def scan_port(ip, port, timeout=1):
@@ -62,6 +74,7 @@ async def scan_port(ip, port, timeout=1):
 	:returns: словарь вида - {'port': 1, 'state': 'open/close'}
 	'''
 	try:
+		logger.debug(f'Scan port[{port}]')
 		await wait_for(open_connection(ip, port), timeout)
 	
 	except IOTimeoutError:
@@ -90,11 +103,13 @@ async def scan_ports(ip, ports, scanners_count=1000):
 
 	result = list()
 
-	workers = [worker(queue, result) for _ in range(scanners_count)]
+	workers = [worker(i, queue, result) for i in range(scanners_count)]
 	tasks = [create_task(worker) for worker in workers]
 
+	logger.debug(f'Host[{ip}:{ports}] scan task start')
 	await queue.join()
 	for task in tasks: task.cancel()
+	logger.debug(f'Host[{ip}:{ports}] scan task finished')
 
 	return result
 
@@ -108,9 +123,11 @@ async def request_worker():
 	'''
 	while True:
 		scan_ports_task = await scan_requests.get()
+		logger.debug('Request worker getting new job')
 		result = await scan_ports_task
 
 		scan_requests.task_done()
+		logger.debug('Request worker finished job')
 		scan_responses.put_nowait(result)
 
 
@@ -120,17 +137,25 @@ async def request_handler(request):
 	Запускает поиск открытых tcp-портов для указанного хоста. 
 	'''
 	info = request.match_info
+	peername = request.transport.get_extra_info('peername')
+
+	logger.info(f'Handle request to scan {info} from {peername}')
 
 	try:
 		ip = str(ip_address(info['ip']))
 		ports = port_range(info['start_port'], info['end_port'])
 
 		await scan_requests.put(scan_ports(ip, ports))
-		response = await scan_responses.get()
 
+		if scan_requests.full():
+			logger.warning(f'Requests limit reached')
+
+		response = await scan_responses.get()
+		logger.debug(f'Send result scan {ip}:{ports} to {peername}')
 		return web.json_response(response)
 
 	except ValueError:
+		logger.debug(f'Invalid request {info} from {peername}')
 		return web.Response(text=f'Invalid IP or ports range')
 
 
@@ -144,4 +169,5 @@ if __name__ == '__main__':
 	app = web.Application()
 	app.add_routes(routes)
 
+	logger.info('Launch tcpscan server')
 	web.run_app(app, host='192.168.1.10', port=8080)
