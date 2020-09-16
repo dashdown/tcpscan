@@ -5,7 +5,7 @@ from ipaddress import ip_address
 
 from asyncio import open_connection, wait_for
 from asyncio import TimeoutError as IOTimeoutError
-from asyncio import create_task
+from asyncio import create_task, get_event_loop
 from asyncio import Queue as IOQueue
 
 
@@ -99,6 +99,21 @@ async def scan_ports(ip, ports, scanners_count=1000):
 	return result
 
 
+async def request_worker():
+	'''
+	Запускает задачи scan_ports из очереди scan_requests.
+
+	Результаты сканирования всех портов определенного хоста
+	направляет в очередь scan_responses.
+	'''
+	while True:
+		scan_ports_task = await scan_requests.get()
+		result = await scan_ports_task
+
+		scan_requests.task_done()
+		scan_responses.put_nowait(result)
+
+
 @routes.get('/scan/{ip}/{start_port}/{end_port}')
 async def request_handler(request):
 	'''
@@ -109,7 +124,9 @@ async def request_handler(request):
 	try:
 		ip = str(ip_address(info['ip']))
 		ports = port_range(info['start_port'], info['end_port'])
-		response = await scan_ports(ip, ports)
+
+		await scan_requests.put(scan_ports(ip, ports))
+		response = await scan_responses.get()
 
 		return web.json_response(response)
 
@@ -118,6 +135,12 @@ async def request_handler(request):
 
 
 if __name__ == '__main__':
+	scan_requests = IOQueue(maxsize=10)
+	scan_responses = IOQueue()
+
+	loop = get_event_loop()
+	loop.create_task(request_worker())
+
 	app = web.Application()
 	app.add_routes(routes)
 
