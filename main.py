@@ -5,7 +5,8 @@ from ipaddress import ip_address
 
 from asyncio import open_connection, wait_for
 from asyncio import TimeoutError as ATimeoutError
-from asyncio import gather
+from asyncio import create_task
+from asyncio import Queue
 
 
 # http://192.168.1.10:8080/scan/95.142.39.186/1/550
@@ -35,6 +36,18 @@ def port_range(start, end):
 	raise ValueError
 
 
+async def worker(queue, result):
+	'''
+	Выполняет задачи из queue по сканированию tcp-портов.
+
+	Результаты сканирования направляет в лист result.
+	'''
+	while True:
+		ip, port = await queue.get()
+		result.append(await scan_port(ip, port))
+		queue.task_done()
+
+
 async def scan_port(ip, port, timeout=1):
 	'''
 	Сканирует конкретный tcp-порт. 
@@ -58,22 +71,30 @@ async def scan_port(ip, port, timeout=1):
 		return {'port': port, 'state': 'open'}
 
 
-async def scan_host_ports(ip, ports):
+async def scan_host_ports(ip, ports, scanners_count=1000):
 	'''
 	Сканирует tcp-порты в указанном промежутке.
 
-	Использует вызов scan_port.
-
 	:param ip: Строка вида '10.32.134.172'.
 	:param ports: - задается, как range().
+	:param scanners_count: Количество сканеров, выполняющих запросы.
 
 	:returns: лист вида - [
 		{'port': 1, 'state': 'open'}, 
 		{'port': 2, 'state': 'close'}, ...
 	]
 	'''
-	scans = [scan_port(ip, port) for port in ports]
-	result = await gather(*scans)
+	queue = Queue()
+	for port in ports:
+		queue.put_nowait(tuple([ip, port]))
+
+	result = list()
+
+	workers = [worker(queue, result) for _ in range(scanners_count)]
+	tasks = [create_task(worker) for worker in workers]
+
+	await queue.join()
+	for task in tasks: task.cancel()
 
 	return result
 
