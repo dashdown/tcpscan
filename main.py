@@ -3,10 +3,10 @@
 from aiohttp import web
 from ipaddress import ip_address
 
-from asyncio import open_connection, wait_for
-from asyncio import TimeoutError as IOTimeoutError
 from asyncio import create_task, get_event_loop
 from asyncio import Queue as IOQueue
+
+from scanner import Scanner
 
 import logging, logging.handlers
 
@@ -36,79 +36,8 @@ def port_range(start, end):
 
 	if is_port(start) and is_port(end) and istart <= iend:
 		return range(istart, iend)
-	
+
 	raise ValueError
-
-
-async def scan_worker(index, queue, result):
-	'''
-	Выполняет задачи из queue по сканированию tcp-портов.
-
-	Результаты сканирования направляет в лист result.
-	'''
-	name = f'Scan worker-{index}'
-
-	while True:
-		ip, port = await queue.get()
-
-		logger.debug(f'{name} getting job to scan {ip}:{port}')
-		result.append(await scan_port(ip, port))
-		queue.task_done()
-		logger.debug(f'{name} finished job')
-
-
-async def scan_port(ip, port, timeout=1):
-	'''
-	Сканирует конкретный tcp-порт. 
-
-	Сканирование производится методом handshake. Важно отметить,
-	что если с хостом нет связи, то вернет ложно-отрицательный
-	результат (порт на самом деле открыт, но скажет, что закрыт).
-
-	:param ip: Строка вида '10.32.134.172'.
-	:param ports: Конкретный сканируемый порт.
-
-	:returns: словарь вида - {'port': 1, 'state': 'open/close'}
-	'''
-	try:
-		logger.debug(f'Scan port[{port}]')
-		await wait_for(open_connection(ip, port), timeout)
-	
-	except IOTimeoutError:
-		return {'port': port, 'state': 'close'}
-	
-	else:
-		return {'port': port, 'state': 'open'}
-
-
-async def scan_ports(ip, ports, scanners_count=1000):
-	'''
-	Сканирует tcp-порты в указанном промежутке.
-
-	:param ip: Строка вида '10.32.134.172'.
-	:param ports: - задается, как range().
-	:param scanners_count: Количество сканеров, выполняющих запросы.
-
-	:returns: лист вида - [
-		{'port': 1, 'state': 'open'}, 
-		{'port': 2, 'state': 'close'}, ...
-	]
-	'''
-	queue = IOQueue()
-	for port in ports:
-		queue.put_nowait(tuple([ip, port]))
-
-	result = list()
-
-	workers = [scan_worker(i, queue, result) for i in range(scanners_count)]
-	tasks = [create_task(worker) for worker in workers]
-
-	logger.debug(f'Host[{ip}:{ports}] scan task start')
-	await queue.join()
-	for task in tasks: task.cancel()
-	logger.debug(f'Host[{ip}:{ports}] scan task finished')
-
-	return result
 
 
 async def request_worker():
@@ -118,10 +47,12 @@ async def request_worker():
 	Результаты сканирования всех портов определенного хоста
 	направляет в очередь scan_responses.
 	'''
+	scanner = Scanner()
+
 	while True:
-		scan_ports_task = await scan_requests.get()
+		ip_and_ports_to_scan = await scan_requests.get()
 		logger.debug('Request worker getting new job')
-		result = await scan_ports_task
+		result = await scanner.scan_ports(*ip_and_ports_to_scan)
 
 		scan_requests.task_done()
 		logger.debug('Request worker finished job')
@@ -147,7 +78,7 @@ async def request_handler(request):
 		return web.Response(text=f'Invalid IP or ports range')
 
 	else:
-		await scan_requests.put(scan_ports(ip, ports))
+		await scan_requests.put(tuple([ip, ports]))
 
 		if scan_requests.full():
 			logger.warning(f'Requests limit reached')
@@ -168,4 +99,4 @@ if __name__ == '__main__':
 	app.add_routes(routes)
 
 	logger.info('Launch tcpscan server')
-	web.run_app(app, host='192.168.1.10', port=8080)
+	web.run_app(app, host='192.168.1.8', port=8080)
