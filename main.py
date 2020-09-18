@@ -40,23 +40,9 @@ def port_range(start, end):
 	raise ValueError
 
 
-async def request_worker():
-	'''
-	Запускает задачи scan_ports из очереди scan_requests.
-
-	Результаты сканирования всех портов определенного хоста
-	направляет в очередь scan_responses.
-	'''
+async def request_worker(ip, ports):
 	scanner = Scanner()
-
-	while True:
-		ip_and_ports_to_scan = await scan_requests.get()
-		logger.debug('Request worker getting new job')
-		result = await scanner.scan_ports(*ip_and_ports_to_scan)
-
-		scan_requests.task_done()
-		logger.debug('Request worker finished job')
-		scan_responses.put_nowait(result)
+	return await scanner.scan_ports(ip, ports)
 
 
 @routes.get('/scan/{ip}/{start_port}/{end_port}')
@@ -78,23 +64,11 @@ async def request_handler(request):
 		return web.Response(text=f'Invalid IP or ports range')
 
 	else:
-		await scan_requests.put(tuple([ip, ports]))
-
-		if scan_requests.full():
-			logger.warning(f'Requests limit reached')
-
-		response = await scan_responses.get()
-		logger.debug(f'Send result scan {ip}:{ports} to {peername}')
+		response = await request_worker(ip, ports)
 		return web.json_response(response)
 
 
 if __name__ == '__main__':
-	scan_requests = IOQueue(maxsize=10)
-	scan_responses = IOQueue()
-
-	loop = get_event_loop()
-	loop.create_task(request_worker())
-
 	app = web.Application()
 	app.add_routes(routes)
 
