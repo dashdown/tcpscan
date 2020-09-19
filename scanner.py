@@ -20,22 +20,18 @@ class Scanner:
 		'''
 		self._response_timeout = response_timeout
 
-		self._scan_tasks_queue = IOQueue()
-		self._scan_tasks_results = list()
+		self._tasks = IOQueue()
+		self._results = list()
 
 		self._workers = list()
 
 		for worker_id in range(sockets_count):
 			worker = self._worker(
 				worker_id,
-				self._scan_tasks_queue,
-				self._scan_tasks_results)
+				self._tasks,
+				self._results)
 
 			self._workers.append(create_task(worker))
-
-		self.is_busy = False
-
-	def is_idle(self): return not self.is_busy
 
 	async def scan_ports(self, ip, ports):
 		'''
@@ -54,16 +50,13 @@ class Scanner:
 			{'port': 2, 'state': 'close'}, ...
 		]
 		'''
-		self.is_busy = True
-
 		for port in ports:
-			self._scan_tasks_queue.put_nowait((ip, port))
+			self._tasks.put_nowait((ip, port))
 
-		await self._scan_tasks_queue.join()
+		await self._tasks.join()
 
-		results = self._scan_tasks_results.copy()
-		self._scan_tasks_results.clear()
-		self.is_busy = False
+		results = self._results.copy()
+		self._results.clear()
 
 		return results
 
@@ -73,14 +66,10 @@ class Scanner:
 				open_connection(ip, port),
 				self._response_timeout)
 
-			result = {'port': port, 'state': 'open'}
+			return {'port': port, 'state': 'open'}
 
 		except IOTimeoutError:
-			result = {'port': port, 'state': 'close'}
-
-		finally:
-			logger.debug(f'Port {port} is {result}')
-			return result
+			return {'port': port, 'state': 'close'}
 
 	async def _worker(self, worker_id, scan_tasks, results):
 		name = f'Scan worker-{worker_id}'
@@ -89,6 +78,9 @@ class Scanner:
 			ip, port = await scan_tasks.get()
 
 			logger.debug(f'{name} getting job to scan {ip}:{port}')
-			results.append(await self._check_tcp_port_openness(ip, port))
+
+			result = await self._check_tcp_port_openness(ip, port)
+			results.append(result)
 			scan_tasks.task_done()
-			logger.debug(f'{name} finished job')
+			
+			logger.debug(f'{name} finished job, result: {result}')

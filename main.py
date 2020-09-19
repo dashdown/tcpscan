@@ -31,18 +31,15 @@ def port_range(start, end):
 
 	:returns: range(start, end)
 	'''
-	is_port = lambda str_: str_.isdigit() and 1 <= int(str_) <= 65535
+	def is_port(str_):
+		return str_.isdigit() and 1 <= int(str_) <= 65535
+
 	istart, iend = int(start), int(end) + 1
 
 	if is_port(start) and is_port(end) and istart <= iend:
 		return range(istart, iend)
 
 	raise ValueError
-
-
-async def request_worker(ip, ports):
-	scanner = Scanner()
-	return await scanner.scan_ports(ip, ports)
 
 
 @routes.get('/scan/{ip}/{start_port}/{end_port}')
@@ -63,9 +60,8 @@ async def request_handler(request):
 		logger.debug(f'Invalid request {info} from {peername}')
 		return web.Response(text=f'Invalid IP or ports range')
 
-	else:
-		response = await request_worker(ip, ports)
-		return web.json_response(response)
+	response = await Scanner().scan_ports(ip, ports)
+	return web.json_response(response)
 
 
 if __name__ == '__main__':
